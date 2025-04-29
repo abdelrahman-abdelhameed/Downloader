@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 
 public class FileHelper
 {
+    private static readonly HttpClient httpClient = new HttpClient();
+
     public async Task CopyFileUsingHttpAsync(string fileUrl, string destinationDirectory)
     {
         if (string.IsNullOrWhiteSpace(fileUrl))
@@ -13,26 +15,44 @@ public class FileHelper
         if (string.IsNullOrWhiteSpace(destinationDirectory))
             throw new ArgumentException("Destination directory must not be empty.", nameof(destinationDirectory));
 
-        // Ensure destination directory exists
         Directory.CreateDirectory(destinationDirectory);
 
-        // Extract file name from URL
         var fileName = Path.GetFileName(new Uri(fileUrl).LocalPath);
         var destinationPath = Path.Combine(destinationDirectory, fileName);
 
-        using (var httpClient = new HttpClient())
+        try
         {
-            try
+            using var request = new HttpRequestMessage(HttpMethod.Get, fileUrl);
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead
+            );
+
+            response.EnsureSuccessStatusCode();
+
+            await using var httpStream = await response.Content.ReadAsStreamAsync();
+            await using var fileStream = new FileStream(
+                destinationPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024, // 1 MB buffer
+                useAsync: true
+            );
+
+            byte[] buffer = new byte[81920]; // 80 KB buffer chunks
+            int bytesRead;
+            while ((bytesRead = await httpStream.ReadAsync(buffer.AsMemory(0, buffer.Length))) > 0)
             {
-                var fileBytes = await httpClient.GetByteArrayAsync(fileUrl);
-                await File.WriteAllBytesAsync(destinationPath, fileBytes);
-                Console.WriteLine($"File downloaded to: {destinationPath}");
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error downloading file: {ex.Message}");
-                throw;
-            }
+
+            Console.WriteLine($" File successfully downloaded to: {destinationPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error downloading file: {ex.Message}");
+            throw;
         }
     }
 }
